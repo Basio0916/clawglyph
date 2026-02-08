@@ -1,0 +1,155 @@
+:root {
+  --bg: #f7f8fb;
+  --panel: #ffffff;
+  --text: #10253f;
+  --muted: #526479;
+  --line: #cfd9e6;
+  --accent: #0b7bcb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "BIZ UDPGothic", "Hiragino Kaku Gothic ProN", sans-serif;
+  color: var(--text);
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 80% -10%, #dff3ff 0%, rgba(223, 243, 255, 0) 45%),
+    radial-gradient(circle at 15% -20%, #e6f6ff 0%, rgba(230, 246, 255, 0) 40%),
+    var(--bg);
+}
+
+.layout {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 16px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.title-block {
+  flex: 0 0 auto;
+}
+
+h1 {
+  margin: 0 0 8px;
+}
+
+.lead {
+  margin: 0;
+  color: var(--muted);
+}
+
+.status-row {
+  margin-top: 2px;
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+}
+
+#status,
+#meta {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--muted);
+}
+
+.workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 12px;
+}
+
+.board-wrap {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
+}
+
+#board {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+  touch-action: none;
+}
+
+#board.dragging {
+  cursor: grabbing;
+}
+
+.minimap-wrap {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.minimap-wrap h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+#minimap {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  display: block;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.mini-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.legend {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.94rem;
+  flex: 0 0 auto;
+}
+
+.legend p {
+  margin: 4px 0 0;
+}
+
+@media (max-width: 960px) {
+  .layout {
+    min-height: 100dvh;
+  }
+
+  .workspace {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .board-wrap {
+    min-height: 58dvh;
+  }
+
+  .minimap-wrap {
+    max-width: 320px;
+    width: 100%;
+  }
+}
