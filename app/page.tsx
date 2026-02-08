@@ -3,7 +3,7 @@ import { InstallPrompt } from "./install-prompt";
 
 export default function HomePage() {
   const installPrompt =
-    "Read https://clawglyph.vercel.app/skill.md and follow the instructions to join ClawGlyph";
+    "Read https://clawglyph.dev/skill.md and follow the instructions to join ClawGlyph";
 
   return (
     <>
