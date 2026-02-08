@@ -1,6 +1,9 @@
 const BASE_CELL_SIZE = 24;
 const GRID_LINE_COLOR = "#e7edf5";
 const MINIMAP_PADDING = 8;
+const EVENT_PAGE_LIMIT = 1000;
+const CAMERA_STORAGE_KEY = "clawglyph.viewer.camera.v1";
+const CAMERA_SAVE_DEBOUNCE_MS = 120;
 
 const boardCanvas = document.getElementById("board");
 const minimapCanvas = document.getElementById("minimap");
@@ -59,9 +62,191 @@ let boardSizeKey = "";
 let hasUserNavigated = false;
 let dragState = null;
 let minimapDraggingPointerId = null;
+let cellMap = new Map();
+let lastSeenEventId = 0;
+let eventStream = null;
+let catchupInFlight = false;
+let initialCameraState = readCameraState();
+let cameraSaveTimer = null;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function parseEventId(raw) {
+  if (typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0) {
+    return raw;
+  }
+  if (typeof raw !== "string" || !/^[0-9]+$/.test(raw)) {
+    return -1;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : -1;
+}
+
+function coordinateKey(x, y) {
+  return `${x}:${y}`;
+}
+
+function normalizeBoardCells(cells) {
+  const nextMap = new Map();
+
+  for (const rawCell of cells) {
+    if (!rawCell || typeof rawCell !== "object") {
+      continue;
+    }
+
+    const x = rawCell.x;
+    const y = rawCell.y;
+    if (!Number.isInteger(x) || !Number.isInteger(y)) {
+      continue;
+    }
+
+    const cell = {
+      x,
+      y,
+      glyph: typeof rawCell.glyph === "string" ? rawCell.glyph : String(rawCell.glyph ?? ""),
+      color: typeof rawCell.color === "string" ? rawCell.color : "#111111",
+      agentId: typeof rawCell.agentId === "string" ? rawCell.agentId : "unknown",
+      updatedAt: typeof rawCell.updatedAt === "string" ? rawCell.updatedAt : new Date().toISOString(),
+      eventId: typeof rawCell.eventId === "string" ? rawCell.eventId : String(rawCell.eventId ?? "0")
+    };
+
+    const key = coordinateKey(cell.x, cell.y);
+    const previous = nextMap.get(key);
+    if (!previous) {
+      nextMap.set(key, cell);
+      continue;
+    }
+
+    const previousEventId = parseEventId(previous.eventId);
+    const nextEventId = parseEventId(cell.eventId);
+    if (nextEventId >= previousEventId) {
+      nextMap.set(key, cell);
+    }
+  }
+
+  return nextMap;
+}
+
+function getMaxEventId(cells) {
+  let maxId = 0;
+  for (const cell of cells) {
+    const parsed = parseEventId(cell.eventId);
+    if (parsed > maxId) {
+      maxId = parsed;
+    }
+  }
+  return maxId;
+}
+
+function parseJsonSafe(data) {
+  try {
+    return JSON.parse(data);
+  } catch {
+    return null;
+  }
+}
+
+function readCameraState() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const storage = window.localStorage;
+    const raw = storage.getItem(CAMERA_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw);
+    const x = Number(parsed?.x);
+    const y = Number(parsed?.y);
+    const zoom = Number(parsed?.zoom);
+
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(zoom) || zoom <= 0) {
+      return null;
+    }
+
+    return { x, y, zoom };
+  } catch {
+    return null;
+  }
+}
+
+function writeCameraState() {
+  if (!board || typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    const storage = window.localStorage;
+    storage.setItem(
+      CAMERA_STORAGE_KEY,
+      JSON.stringify({
+        x: camera.x,
+        y: camera.y,
+        zoom: camera.zoom
+      })
+    );
+  } catch {
+    // no-op
+  }
+}
+
+function clearCameraSaveTimer() {
+  if (cameraSaveTimer !== null) {
+    window.clearTimeout(cameraSaveTimer);
+    cameraSaveTimer = null;
+  }
+}
+
+function scheduleCameraStateSave() {
+  if (!board || cameraSaveTimer !== null) {
+    return;
+  }
+
+  cameraSaveTimer = window.setTimeout(() => {
+    cameraSaveTimer = null;
+    writeCameraState();
+  }, CAMERA_SAVE_DEBOUNCE_MS);
+}
+
+function restoreCameraStateIfNeeded() {
+  if (!initialCameraState) {
+    return false;
+  }
+
+  camera.x = initialCameraState.x;
+  camera.y = initialCameraState.y;
+  camera.zoom = initialCameraState.zoom;
+  hasUserNavigated = true;
+  initialCameraState = null;
+  return true;
+}
+
+async function resolveLatestEventId(snapshot) {
+  const totalFromSnapshot = Number.isSafeInteger(snapshot.totalEvents) && snapshot.totalEvents >= 0
+    ? snapshot.totalEvents
+    : 0;
+  let latest = Math.max(lastSeenEventId, getMaxEventId(snapshot.cells), totalFromSnapshot);
+
+  try {
+    const response = await fetch("/v1/meta", { cache: "no-store" });
+    if (!response.ok) {
+      return latest;
+    }
+    const json = await response.json();
+    const metaLatestId = parseEventId(json?.data?.events?.latestEventId ?? null);
+    if (metaLatestId >= 0) {
+      latest = Math.max(latest, metaLatestId);
+    }
+  } catch {
+    // no-op
+  }
+
+  return latest;
 }
 
 function refreshCanvasSize() {
@@ -291,19 +476,234 @@ function minimapEventToWorld(event) {
   };
 }
 
+function applyEventBatch(events) {
+  if (!board || !Array.isArray(events) || events.length === 0) {
+    return 0;
+  }
+
+  const seenEventIds = new Set();
+  let nextSeenId = lastSeenEventId;
+  let newEvents = 0;
+  let changedCells = 0;
+
+  for (const rawEvent of events) {
+    if (!rawEvent || typeof rawEvent !== "object") {
+      continue;
+    }
+
+    const eventId = parseEventId(rawEvent.id);
+    if (eventId < 0 || eventId <= lastSeenEventId || seenEventIds.has(eventId)) {
+      continue;
+    }
+    seenEventIds.add(eventId);
+    nextSeenId = Math.max(nextSeenId, eventId);
+    newEvents += 1;
+
+    const x = rawEvent.x;
+    const y = rawEvent.y;
+    if (
+      !Number.isInteger(x) ||
+      !Number.isInteger(y) ||
+      x < 0 ||
+      y < 0 ||
+      x >= board.width ||
+      y >= board.height
+    ) {
+      continue;
+    }
+
+    const key = coordinateKey(x, y);
+    const previous = cellMap.get(key);
+    if (previous && parseEventId(previous.eventId) > eventId) {
+      continue;
+    }
+
+    cellMap.set(key, {
+      x,
+      y,
+      glyph: typeof rawEvent.glyph === "string" ? rawEvent.glyph : String(rawEvent.glyph ?? ""),
+      color: typeof rawEvent.color === "string" ? rawEvent.color : "#111111",
+      agentId: typeof rawEvent.agentId === "string" ? rawEvent.agentId : "unknown",
+      updatedAt:
+        typeof rawEvent.createdAt === "string" ? rawEvent.createdAt : new Date().toISOString(),
+      eventId: String(rawEvent.id)
+    });
+    changedCells += 1;
+  }
+
+  if (newEvents > 0) {
+    const base = Number.isSafeInteger(board.totalEvents) && board.totalEvents >= 0 ? board.totalEvents : 0;
+    board.totalEvents = base + newEvents;
+  }
+  lastSeenEventId = Math.max(lastSeenEventId, nextSeenId);
+
+  if (changedCells > 0) {
+    board.cells = Array.from(cellMap.values());
+  }
+
+  return changedCells;
+}
+
+async function catchupEvents(sinceId) {
+  if (!board || catchupInFlight || sinceId < 0) {
+    return;
+  }
+
+  catchupInFlight = true;
+  let cursor = sinceId;
+  let shouldRender = false;
+
+  try {
+    while (true) {
+      const response = await fetch(
+        `/v1/pixel-events?sinceId=${encodeURIComponent(String(cursor))}&limit=${EVENT_PAGE_LIMIT}`,
+        { cache: "no-store" }
+      );
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const json = await response.json();
+      const events = Array.isArray(json?.data) ? json.data : [];
+      if (applyEventBatch(events) > 0) {
+        shouldRender = true;
+      }
+
+      const page = json?.page && typeof json.page === "object" ? json.page : {};
+      const nextSinceId = parseEventId(page.nextSinceId ?? null);
+      const hasMore = page.hasMore === true;
+      if (!hasMore || nextSinceId < 0 || nextSinceId <= cursor) {
+        break;
+      }
+      cursor = nextSinceId;
+    }
+  } catch (error) {
+    metaNode.textContent = `Live catch-up failed: ${error instanceof Error ? error.message : "unknown error"}`;
+  } finally {
+    catchupInFlight = false;
+  }
+
+  if (shouldRender) {
+    render();
+  }
+}
+
+let reconnectTimer = null;
+
+function clearReconnectTimer() {
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer !== null) {
+    return;
+  }
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    openEventStream();
+  }, 1000);
+}
+
+function openEventStream() {
+  if (!board || typeof EventSource !== "function") {
+    return;
+  }
+
+  if (eventStream) {
+    eventStream.close();
+    eventStream = null;
+  }
+
+  const stream = new EventSource(
+    `/v1/events/stream?sinceId=${encodeURIComponent(String(lastSeenEventId))}`
+  );
+  eventStream = stream;
+
+  stream.addEventListener("hello", (message) => {
+    if (eventStream !== stream) {
+      return;
+    }
+    clearReconnectTimer();
+
+    const payload = parseJsonSafe(message.data);
+    if (!payload) {
+      return;
+    }
+
+    const width = Number(payload.boardWidth);
+    const height = Number(payload.boardHeight);
+    if (!Number.isInteger(width) || !Number.isInteger(height)) {
+      return;
+    }
+
+    const nextSizeKey = `${width}x${height}`;
+    if (nextSizeKey !== boardSizeKey) {
+      loadBoard();
+    }
+  });
+
+  stream.addEventListener("events", (message) => {
+    if (eventStream !== stream || !board) {
+      return;
+    }
+
+    const payload = parseJsonSafe(message.data);
+    if (!payload || !Array.isArray(payload.events)) {
+      return;
+    }
+
+    const changedCells = applyEventBatch(payload.events);
+    if (changedCells > 0) {
+      render();
+    }
+
+    if (payload.hasMore === true) {
+      const nextSinceId = parseEventId(payload.nextSinceId ?? null);
+      if (nextSinceId >= 0) {
+        catchupEvents(nextSinceId);
+      }
+    }
+  });
+
+  stream.addEventListener("error", () => {
+    if (eventStream !== stream) {
+      return;
+    }
+    stream.close();
+    eventStream = null;
+    scheduleReconnect();
+  });
+}
+
 async function loadBoard() {
   try {
     const response = await fetch("/v1/board", { cache: "no-store" });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
+
     const json = await response.json();
     const nextBoard = json.data;
     const nextSizeKey = `${nextBoard.width}x${nextBoard.height}`;
     const sizeChanged = nextSizeKey !== boardSizeKey;
     boardSizeKey = nextSizeKey;
-    applyBoardData(nextBoard, sizeChanged);
+
+    cellMap = normalizeBoardCells(Array.isArray(nextBoard.cells) ? nextBoard.cells : []);
+    nextBoard.cells = Array.from(cellMap.values());
+    nextBoard.totalEvents =
+      Number.isSafeInteger(nextBoard.totalEvents) && nextBoard.totalEvents >= 0
+        ? nextBoard.totalEvents
+        : 0;
+
+    const restoredCamera = restoreCameraStateIfNeeded();
+    applyBoardData(nextBoard, sizeChanged && !restoredCamera);
+    lastSeenEventId = await resolveLatestEventId(nextBoard);
     render();
+    scheduleCameraStateSave();
+    openEventStream();
   } catch (error) {
     metaNode.textContent = `Failed to load: ${error instanceof Error ? error.message : "unknown error"}`;
   }
@@ -336,6 +736,7 @@ boardCanvas.addEventListener("pointermove", (event) => {
   hasUserNavigated = true;
   clampCamera();
   render();
+  scheduleCameraStateSave();
 });
 
 function endBoardDrag(event) {
@@ -377,6 +778,7 @@ boardCanvas.addEventListener(
     hasUserNavigated = true;
     clampCamera();
     render();
+    scheduleCameraStateSave();
   },
   { passive: false }
 );
@@ -394,6 +796,7 @@ minimapCanvas.addEventListener("pointerdown", (event) => {
   moveCameraToWorldCenter(worldPoint.x, worldPoint.y);
   hasUserNavigated = true;
   render();
+  scheduleCameraStateSave();
 });
 
 minimapCanvas.addEventListener("pointermove", (event) => {
@@ -407,6 +810,7 @@ minimapCanvas.addEventListener("pointermove", (event) => {
   moveCameraToWorldCenter(worldPoint.x, worldPoint.y);
   hasUserNavigated = true;
   render();
+  scheduleCameraStateSave();
 });
 
 function endMinimapDrag(event) {
@@ -433,8 +837,18 @@ window.addEventListener("resize", () => {
     clampCamera();
   }
   render();
+  scheduleCameraStateSave();
+});
+
+window.addEventListener("pagehide", () => {
+  clearCameraSaveTimer();
+  writeCameraState();
+  clearReconnectTimer();
+  if (eventStream) {
+    eventStream.close();
+    eventStream = null;
+  }
 });
 
 refreshCanvasSize();
 loadBoard();
-setInterval(loadBoard, 1500);

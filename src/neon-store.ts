@@ -43,6 +43,11 @@ interface AgentRow {
   created_at: Date | string;
 }
 
+interface EventStatsRow {
+  total_events: string | number;
+  latest_event_id: string | number;
+}
+
 function toIsoString(value: Date | string): string {
   return new Date(value).toISOString();
 }
@@ -108,43 +113,77 @@ export class NeonPixelStore implements PixelStore {
   }
 
   async addMany(payloads: PixelPlacementInput[], agentId: string): Promise<PixelEvent[]> {
+    if (payloads.length === 0) {
+      return [];
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      const created: PixelEvent[] = [];
+      const xList = payloads.map((payload) => payload.x);
+      const yList = payloads.map((payload) => payload.y);
+      const glyphList = payloads.map((payload) => payload.glyph);
+      const colorList = payloads.map((payload) => payload.color);
 
-      for (const payload of payloads) {
-        const eventResult = await client.query<EventRow>(
-          `INSERT INTO pixel_events (x, y, glyph, color, agent_id)
-           VALUES ($1, $2, $3, $4, $5)
-           RETURNING id, x, y, glyph, color, agent_id, created_at`,
-          [payload.x, payload.y, payload.glyph, payload.color, agentId]
-        );
-        const eventRow = eventResult.rows[0];
-        const createdEvent = toEvent(eventRow);
-        created.push(createdEvent);
-
-        await client.query(
-          `INSERT INTO board_cells (x, y, glyph, color, agent_id, updated_at, event_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+      const insertResult = await client.query<EventRow>(
+        `WITH input AS (
+           SELECT
+             x,
+             y,
+             glyph,
+             color,
+             $5::text AS agent_id
+           FROM UNNEST($1::int[], $2::int[], $3::text[], $4::text[]) AS t(x, y, glyph, color)
+         ),
+         inserted AS (
+           INSERT INTO pixel_events (x, y, glyph, color, agent_id)
+           SELECT x, y, glyph, color, agent_id
+           FROM input
+           RETURNING id, x, y, glyph, color, agent_id, created_at
+         ),
+         latest_per_cell AS (
+           SELECT DISTINCT ON (x, y)
+             x,
+             y,
+             glyph,
+             color,
+             agent_id,
+             created_at,
+             id
+           FROM inserted
+           ORDER BY x, y, id DESC
+         ),
+         upserted AS (
+           INSERT INTO board_cells (x, y, glyph, color, agent_id, updated_at, event_id)
+           SELECT x, y, glyph, color, agent_id, created_at, id
+           FROM latest_per_cell
            ON CONFLICT (x, y)
            DO UPDATE SET
              glyph = EXCLUDED.glyph,
              color = EXCLUDED.color,
              agent_id = EXCLUDED.agent_id,
              updated_at = EXCLUDED.updated_at,
-             event_id = EXCLUDED.event_id`,
-          [
-            payload.x,
-            payload.y,
-            payload.glyph,
-            payload.color,
-            agentId,
-            eventRow.created_at,
-            eventRow.id
-          ]
-        );
-      }
+             event_id = EXCLUDED.event_id
+           RETURNING 1
+         )
+         SELECT id, x, y, glyph, color, agent_id, created_at
+         FROM inserted
+         ORDER BY id ASC`,
+        [xList, yList, glyphList, colorList, agentId]
+      );
+
+      const created = insertResult.rows.map(toEvent);
+      const latestId = Number(created[created.length - 1]?.id ?? 0);
+      await client.query(
+        `INSERT INTO event_stats (id, total_events, latest_event_id, updated_at)
+         VALUES (TRUE, $1::bigint, $2::bigint, NOW())
+         ON CONFLICT (id)
+         DO UPDATE SET
+           total_events = event_stats.total_events + EXCLUDED.total_events,
+           latest_event_id = GREATEST(event_stats.latest_event_id, EXCLUDED.latest_event_id),
+           updated_at = NOW()`,
+        [created.length, latestId]
+      );
 
       await client.query("COMMIT");
       return created;
@@ -232,7 +271,7 @@ export class NeonPixelStore implements PixelStore {
     width: number,
     height: number
   ): Promise<BoardRegionSnapshot> {
-    const [cellsResult, totalResult] = await Promise.all([
+    const [cellsResult, statsResult] = await Promise.all([
       this.pool.query<CellRow>(
         `SELECT x, y, glyph, color, agent_id, updated_at, event_id
          FROM board_cells
@@ -240,7 +279,12 @@ export class NeonPixelStore implements PixelStore {
          ORDER BY event_id ASC`,
         [originX, originX + width, originY, originY + height]
       ),
-      this.pool.query<{ count: string }>(`SELECT COUNT(*)::text AS count FROM pixel_events`)
+      this.pool.query<EventStatsRow>(
+        `SELECT total_events, latest_event_id
+         FROM event_stats
+         WHERE id = TRUE
+         LIMIT 1`
+      )
     ]);
 
     const cells: BoardCell[] = cellsResult.rows.map((row) => ({
@@ -259,7 +303,7 @@ export class NeonPixelStore implements PixelStore {
       width,
       height,
       cells,
-      totalEvents: Number(totalResult.rows[0]?.count ?? "0")
+      totalEvents: Number(statsResult.rows[0]?.total_events ?? 0)
     };
   }
 
@@ -302,16 +346,20 @@ export class NeonPixelStore implements PixelStore {
   }
 
   async getEventStats(): Promise<StoreEventStats> {
-    const result = await this.pool.query<{ total_events: string; latest_event_id: string | null }>(
-      `SELECT
-         COUNT(*)::text AS total_events,
-         MAX(id)::text AS latest_event_id
-       FROM pixel_events`
+    const result = await this.pool.query<EventStatsRow>(
+      `SELECT total_events, latest_event_id
+       FROM event_stats
+       WHERE id = TRUE
+       LIMIT 1`
     );
     const row = result.rows[0];
+    const latestValue = row?.latest_event_id ?? 0;
+    const latestEventId =
+      Number(latestValue) > 0 ? String(latestValue) : null;
+
     return {
-      totalEvents: Number(row?.total_events ?? "0"),
-      latestEventId: row?.latest_event_id ?? null
+      totalEvents: Number(row?.total_events ?? 0),
+      latestEventId
     };
   }
 
@@ -439,6 +487,26 @@ export class NeonPixelStore implements PixelStore {
         event_id BIGINT NOT NULL REFERENCES pixel_events(id),
         PRIMARY KEY (x, y)
       );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS event_stats (
+        id BOOLEAN PRIMARY KEY DEFAULT TRUE,
+        total_events BIGINT NOT NULL DEFAULT 0,
+        latest_event_id BIGINT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CHECK (id)
+      );
+    `);
+
+    await client.query(`
+      INSERT INTO event_stats (id, total_events, latest_event_id)
+      SELECT
+        TRUE,
+        COUNT(*)::bigint,
+        COALESCE(MAX(id), 0)::bigint
+      FROM pixel_events
+      ON CONFLICT (id) DO NOTHING;
     `);
 
     await client.query(`

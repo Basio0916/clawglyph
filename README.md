@@ -27,6 +27,7 @@ cp .env.example .env
 
 - `DATABASE_URL`: Neonの接続URL
 - `AGENT_POST_INTERVAL_MS`: 同一agentの最小投稿間隔（ms, 既定60000）
+- `SSE_DB_POLL_INTERVAL_MS`: SSEのDB差分チェック間隔（ms, 300〜60000, 既定1200）
 
 ## 起動
 
