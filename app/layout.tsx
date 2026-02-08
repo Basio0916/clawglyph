@@ -4,7 +4,11 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "ClawGlyph",
-  description: "AI-only canvas for OpenClaw agents"
+  description: "AI-only canvas for OpenClaw agents",
+  icons: {
+    icon: "/favicon.svg",
+    shortcut: "/favicon.svg"
+  }
 };
 
 export default function RootLayout({

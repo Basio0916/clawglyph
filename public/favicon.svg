@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ClawGlyph favicon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#170a2d" />
+      <stop offset="1" stop-color="#03152f" />
+    </linearGradient>
+    <radialGradient id="shell" cx="50%" cy="35%" r="60%">
+      <stop offset="0" stop-color="#ff5f70" />
+      <stop offset="1" stop-color="#b31231" />
+    </radialGradient>
+    <linearGradient id="glyphTile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#17315a" />
+      <stop offset="1" stop-color="#0b1f40" />
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.6" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="64" height="64" rx="14" fill="url(#bg)" />
+
+  <g filter="url(#glow)">
+    <circle cx="32" cy="34" r="16" fill="url(#shell)" />
+    <circle cx="18.7" cy="35.3" r="4.7" fill="#cf2442" />
+    <circle cx="45.3" cy="35.3" r="4.7" fill="#cf2442" />
+    <path d="M25 19c0-3.2-1.6-5-4.3-6.3" fill="none" stroke="#ff5f70" stroke-width="2.2" stroke-linecap="round" />
+    <path d="M39 19c0-3.2 1.6-5 4.3-6.3" fill="none" stroke="#ff5f70" stroke-width="2.2" stroke-linecap="round" />
+  </g>
+
+  <circle cx="27.5" cy="30.5" r="3.4" fill="#10253f" />
+  <circle cx="36.5" cy="30.5" r="3.4" fill="#10253f" />
+  <circle cx="27.5" cy="30.5" r="1.5" fill="#6df9ff" />
+  <circle cx="36.5" cy="30.5" r="1.5" fill="#6df9ff" />
+
+  <rect x="22.2" y="36.4" width="19.6" height="11.8" rx="3.2" fill="url(#glyphTile)" stroke="#2d4e83" stroke-width="0.9" />
+  <rect x="23.9" y="39.2" width="16.2" height="6.5" rx="1.3" fill="#122a54" stroke="#2d4e83" stroke-width="0.7" />
+  <path d="M27.1 39.2v6.5" stroke="#2d4e83" stroke-width="0.65" />
+  <path d="M30.4 39.2v6.5" stroke="#2d4e83" stroke-width="0.65" />
+  <path d="M33.6 39.2v6.5" stroke="#2d4e83" stroke-width="0.65" />
+  <path d="M36.9 39.2v6.5" stroke="#2d4e83" stroke-width="0.65" />
+  <text x="25.5" y="43.8" text-anchor="middle" font-size="3.2" font-weight="700" fill="#72f7ff" font-family="Verdana, Arial, sans-serif">G</text>
+  <text x="28.7" y="43.8" text-anchor="middle" font-size="3.2" font-weight="700" fill="#72f7ff" font-family="Verdana, Arial, sans-serif">L</text>
+  <text x="31.9" y="43.8" text-anchor="middle" font-size="3.2" font-weight="700" fill="#72f7ff" font-family="Verdana, Arial, sans-serif">Y</text>
+  <text x="35.2" y="43.8" text-anchor="middle" font-size="3.2" font-weight="700" fill="#72f7ff" font-family="Verdana, Arial, sans-serif">P</text>
+  <text x="38.4" y="43.8" text-anchor="middle" font-size="3.2" font-weight="700" fill="#72f7ff" font-family="Verdana, Arial, sans-serif">H</text>
+
+  <rect x="27" y="49" width="4.6" height="6" rx="1.3" fill="#c01635" />
+  <rect x="32.4" y="49" width="4.6" height="6" rx="1.3" fill="#c01635" />
+  <path d="M42.2 25.8l1 1.1 1.5-0.4-0.8 1.4 0.8 1.3-1.5-0.4-1 1.2-0.1-1.6-1.4-0.6 1.4-0.5z" fill="#ff9ca9" />
+</svg>
