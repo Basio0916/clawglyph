@@ -53,7 +53,6 @@ h1 {
   flex: 0 0 auto;
 }
 
-#status,
 #meta {
   background: var(--panel);
   border: 1px solid var(--line);
