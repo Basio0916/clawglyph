@@ -62,6 +62,7 @@ let boardSizeKey = "";
 let hasUserNavigated = false;
 const boardPointers = new Map();
 let boardGestureState = null;
+let boardTouchGestureState = null;
 let minimapDraggingPointerId = null;
 let cellMap = new Map();
 let lastSeenEventId = 0;
@@ -547,6 +548,56 @@ function refreshBoardGestureState() {
   startBoardPinch(pointers[0], pointers[1]);
 }
 
+function findTouchById(touchList, touchId) {
+  for (const touch of touchList) {
+    if (touch.identifier === touchId) {
+      return touch;
+    }
+  }
+  return null;
+}
+
+function startBoardTouchDrag(touch) {
+  boardTouchGestureState = {
+    type: "drag",
+    touchId: touch.identifier,
+    x: touch.clientX,
+    y: touch.clientY
+  };
+  boardCanvas.classList.add("dragging");
+}
+
+function startBoardTouchPinch(touchA, touchB) {
+  const geometry = getPointerGeometry(
+    { x: touchA.clientX, y: touchA.clientY },
+    { x: touchB.clientX, y: touchB.clientY }
+  );
+  boardTouchGestureState = {
+    type: "pinch",
+    touchAId: touchA.identifier,
+    touchBId: touchB.identifier,
+    previousDistance: Math.max(geometry.distance, 1),
+    previousCenterX: geometry.centerX,
+    previousCenterY: geometry.centerY
+  };
+  boardCanvas.classList.remove("dragging");
+}
+
+function refreshTouchGestureFromTouches(touchList) {
+  if (touchList.length === 0) {
+    boardTouchGestureState = null;
+    boardCanvas.classList.remove("dragging");
+    return;
+  }
+
+  if (touchList.length === 1) {
+    startBoardTouchDrag(touchList[0]);
+    return;
+  }
+
+  startBoardTouchPinch(touchList[0], touchList[1]);
+}
+
 function applyEventBatch(events) {
   if (!board || !Array.isArray(events) || events.length === 0) {
     return 0;
@@ -781,7 +832,7 @@ async function loadBoard() {
 }
 
 boardCanvas.addEventListener("pointerdown", (event) => {
-  if (!board) {
+  if (!board || event.pointerType === "touch") {
     return;
   }
 
@@ -795,7 +846,7 @@ boardCanvas.addEventListener("pointerdown", (event) => {
 });
 
 boardCanvas.addEventListener("pointermove", (event) => {
-  if (!board || !boardPointers.has(event.pointerId)) {
+  if (!board || event.pointerType === "touch" || !boardPointers.has(event.pointerId)) {
     return;
   }
 
@@ -862,7 +913,7 @@ boardCanvas.addEventListener("pointermove", (event) => {
 });
 
 function endBoardPointer(event) {
-  if (!boardPointers.has(event.pointerId)) {
+  if (event.pointerType === "touch" || !boardPointers.has(event.pointerId)) {
     return;
   }
 
@@ -875,6 +926,107 @@ function endBoardPointer(event) {
 
 boardCanvas.addEventListener("pointerup", endBoardPointer);
 boardCanvas.addEventListener("pointercancel", endBoardPointer);
+
+boardCanvas.addEventListener(
+  "touchstart",
+  (event) => {
+    if (!board) {
+      return;
+    }
+    refreshTouchGestureFromTouches(event.touches);
+    event.preventDefault();
+  },
+  { passive: false }
+);
+
+boardCanvas.addEventListener(
+  "touchmove",
+  (event) => {
+    if (!board || event.touches.length === 0) {
+      return;
+    }
+
+    if (!boardTouchGestureState) {
+      refreshTouchGestureFromTouches(event.touches);
+      event.preventDefault();
+      return;
+    }
+
+    if (boardTouchGestureState.type === "drag") {
+      const touch =
+        findTouchById(event.touches, boardTouchGestureState.touchId) ?? event.touches[0] ?? null;
+      if (!touch) {
+        refreshTouchGestureFromTouches(event.touches);
+        event.preventDefault();
+        return;
+      }
+
+      const dx = touch.clientX - boardTouchGestureState.x;
+      const dy = touch.clientY - boardTouchGestureState.y;
+      boardTouchGestureState.touchId = touch.identifier;
+      boardTouchGestureState.x = touch.clientX;
+      boardTouchGestureState.y = touch.clientY;
+
+      camera.x -= dx / camera.zoom;
+      camera.y -= dy / camera.zoom;
+      hasUserNavigated = true;
+      clampCamera();
+      render();
+      scheduleCameraStateSave();
+      event.preventDefault();
+      return;
+    }
+
+    if (boardTouchGestureState.type !== "pinch") {
+      event.preventDefault();
+      return;
+    }
+
+    const touchA = findTouchById(event.touches, boardTouchGestureState.touchAId);
+    const touchB = findTouchById(event.touches, boardTouchGestureState.touchBId);
+
+    if (!touchA || !touchB) {
+      refreshTouchGestureFromTouches(event.touches);
+      event.preventDefault();
+      return;
+    }
+
+    const geometry = getPointerGeometry(
+      { x: touchA.clientX, y: touchA.clientY },
+      { x: touchB.clientX, y: touchB.clientY }
+    );
+    const currentDistance = Math.max(geometry.distance, 1);
+    const zoomRate = currentDistance / boardTouchGestureState.previousDistance;
+    const nextZoom = clamp(camera.zoom * zoomRate, camera.minZoom, camera.maxZoom);
+    const anchorWorldX = camera.x + boardTouchGestureState.previousCenterX / camera.zoom;
+    const anchorWorldY = camera.y + boardTouchGestureState.previousCenterY / camera.zoom;
+
+    camera.zoom = nextZoom;
+    camera.x = anchorWorldX - geometry.centerX / camera.zoom;
+    camera.y = anchorWorldY - geometry.centerY / camera.zoom;
+    boardTouchGestureState.previousDistance = currentDistance;
+    boardTouchGestureState.previousCenterX = geometry.centerX;
+    boardTouchGestureState.previousCenterY = geometry.centerY;
+
+    hasUserNavigated = true;
+    clampCamera();
+    render();
+    scheduleCameraStateSave();
+    event.preventDefault();
+  },
+  { passive: false }
+);
+
+function endBoardTouch(event) {
+  if (!board) {
+    return;
+  }
+  refreshTouchGestureFromTouches(event.touches);
+  event.preventDefault();
+}
+
+boardCanvas.addEventListener("touchend", endBoardTouch, { passive: false });
+boardCanvas.addEventListener("touchcancel", endBoardTouch, { passive: false });
 
 boardCanvas.addEventListener(
   "wheel",
