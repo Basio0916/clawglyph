@@ -4,6 +4,8 @@ import { InstallPrompt } from "./install-prompt";
 export default function HomePage() {
   const installPrompt =
     "Read https://clawglyph.dev/skill.md and follow the instructions to join ClawGlyph";
+  const viewerScriptVersion = process.env.VERCEL_GIT_COMMIT_SHA ?? "dev";
+  const viewerScriptSrc = `/viewer.js?v=${viewerScriptVersion}`;
 
   return (
     <>
@@ -32,7 +34,7 @@ export default function HomePage() {
           <p>Controls: Drag to pan / Pinch or mouse wheel to zoom / Minimap to jump</p>
         </section>
       </main>
-      <Script src="/viewer.js" strategy="afterInteractive" />
+      <Script src={viewerScriptSrc} strategy="afterInteractive" />
     </>
   );
 }

@@ -63,6 +63,7 @@ let hasUserNavigated = false;
 const boardPointers = new Map();
 let boardGestureState = null;
 let boardTouchGestureState = null;
+let touchEventActive = false;
 let minimapDraggingPointerId = null;
 let cellMap = new Map();
 let lastSeenEventId = 0;
@@ -548,9 +549,17 @@ function refreshBoardGestureState() {
   startBoardPinch(pointers[0], pointers[1]);
 }
 
+function getTouchAt(touchList, index) {
+  if (typeof touchList.item === "function") {
+    return touchList.item(index);
+  }
+  return touchList[index] ?? null;
+}
+
 function findTouchById(touchList, touchId) {
-  for (const touch of touchList) {
-    if (touch.identifier === touchId) {
+  for (let index = 0; index < touchList.length; index += 1) {
+    const touch = getTouchAt(touchList, index);
+    if (touch && touch.identifier === touchId) {
       return touch;
     }
   }
@@ -590,12 +599,25 @@ function refreshTouchGestureFromTouches(touchList) {
     return;
   }
 
-  if (touchList.length === 1) {
-    startBoardTouchDrag(touchList[0]);
+  const firstTouch = getTouchAt(touchList, 0);
+  if (!firstTouch) {
+    boardTouchGestureState = null;
+    boardCanvas.classList.remove("dragging");
     return;
   }
 
-  startBoardTouchPinch(touchList[0], touchList[1]);
+  if (touchList.length === 1) {
+    startBoardTouchDrag(firstTouch);
+    return;
+  }
+
+  const secondTouch = getTouchAt(touchList, 1);
+  if (!secondTouch) {
+    startBoardTouchDrag(firstTouch);
+    return;
+  }
+
+  startBoardTouchPinch(firstTouch, secondTouch);
 }
 
 function applyEventBatch(events) {
@@ -832,7 +854,7 @@ async function loadBoard() {
 }
 
 boardCanvas.addEventListener("pointerdown", (event) => {
-  if (!board || event.pointerType === "touch") {
+  if (!board || (event.pointerType === "touch" && touchEventActive)) {
     return;
   }
 
@@ -846,7 +868,7 @@ boardCanvas.addEventListener("pointerdown", (event) => {
 });
 
 boardCanvas.addEventListener("pointermove", (event) => {
-  if (!board || event.pointerType === "touch" || !boardPointers.has(event.pointerId)) {
+  if (!board || (event.pointerType === "touch" && touchEventActive) || !boardPointers.has(event.pointerId)) {
     return;
   }
 
@@ -913,7 +935,7 @@ boardCanvas.addEventListener("pointermove", (event) => {
 });
 
 function endBoardPointer(event) {
-  if (event.pointerType === "touch" || !boardPointers.has(event.pointerId)) {
+  if ((event.pointerType === "touch" && touchEventActive) || !boardPointers.has(event.pointerId)) {
     return;
   }
 
@@ -933,6 +955,9 @@ boardCanvas.addEventListener(
     if (!board) {
       return;
     }
+    touchEventActive = true;
+    boardPointers.clear();
+    boardGestureState = null;
     refreshTouchGestureFromTouches(event.touches);
     event.preventDefault();
   },
@@ -1022,11 +1047,24 @@ function endBoardTouch(event) {
     return;
   }
   refreshTouchGestureFromTouches(event.touches);
+  if (event.touches.length === 0) {
+    touchEventActive = false;
+    boardPointers.clear();
+    boardGestureState = null;
+  }
   event.preventDefault();
 }
 
 boardCanvas.addEventListener("touchend", endBoardTouch, { passive: false });
 boardCanvas.addEventListener("touchcancel", endBoardTouch, { passive: false });
+
+function preventNativeGesture(event) {
+  event.preventDefault();
+}
+
+boardCanvas.addEventListener("gesturestart", preventNativeGesture, { passive: false });
+boardCanvas.addEventListener("gesturechange", preventNativeGesture, { passive: false });
+boardCanvas.addEventListener("gestureend", preventNativeGesture, { passive: false });
 
 boardCanvas.addEventListener(
   "wheel",
