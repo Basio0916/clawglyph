@@ -60,7 +60,8 @@ const minimapLayout = {
 let board = null;
 let boardSizeKey = "";
 let hasUserNavigated = false;
-let dragState = null;
+const boardPointers = new Map();
+let boardGestureState = null;
 let minimapDraggingPointerId = null;
 let cellMap = new Map();
 let lastSeenEventId = 0;
@@ -476,6 +477,76 @@ function minimapEventToWorld(event) {
   };
 }
 
+function getPointerGeometry(pointA, pointB) {
+  const dx = pointB.x - pointA.x;
+  const dy = pointB.y - pointA.y;
+  return {
+    distance: Math.hypot(dx, dy),
+    centerX: (pointA.x + pointB.x) / 2,
+    centerY: (pointA.y + pointB.y) / 2
+  };
+}
+
+function getFirstTwoBoardPointers() {
+  const pointerEntries = Array.from(boardPointers.entries());
+  if (pointerEntries.length < 2) {
+    return null;
+  }
+
+  const [firstId, firstPoint] = pointerEntries[0];
+  const [secondId, secondPoint] = pointerEntries[1];
+  return [
+    { pointerId: firstId, ...firstPoint },
+    { pointerId: secondId, ...secondPoint }
+  ];
+}
+
+function startBoardDrag(pointerId, point) {
+  boardGestureState = {
+    type: "drag",
+    pointerId,
+    x: point.x,
+    y: point.y
+  };
+  boardCanvas.classList.add("dragging");
+}
+
+function startBoardPinch(pointerA, pointerB) {
+  const geometry = getPointerGeometry(pointerA, pointerB);
+  boardGestureState = {
+    type: "pinch",
+    pointerAId: pointerA.pointerId,
+    pointerBId: pointerB.pointerId,
+    previousDistance: Math.max(geometry.distance, 1),
+    previousCenterX: geometry.centerX,
+    previousCenterY: geometry.centerY
+  };
+  boardCanvas.classList.remove("dragging");
+}
+
+function refreshBoardGestureState() {
+  if (boardPointers.size === 0) {
+    boardGestureState = null;
+    boardCanvas.classList.remove("dragging");
+    return;
+  }
+
+  if (boardPointers.size === 1) {
+    const [pointerId, point] = boardPointers.entries().next().value;
+    startBoardDrag(pointerId, point);
+    return;
+  }
+
+  const pointers = getFirstTwoBoardPointers();
+  if (!pointers) {
+    boardGestureState = null;
+    boardCanvas.classList.remove("dragging");
+    return;
+  }
+
+  startBoardPinch(pointers[0], pointers[1]);
+}
+
 function applyEventBatch(events) {
   if (!board || !Array.isArray(events) || events.length === 0) {
     return 0;
@@ -713,43 +784,97 @@ boardCanvas.addEventListener("pointerdown", (event) => {
   if (!board) {
     return;
   }
-  dragState = {
-    pointerId: event.pointerId,
+
+  boardPointers.set(event.pointerId, {
     x: event.clientX,
     y: event.clientY
-  };
-  boardCanvas.classList.add("dragging");
+  });
+  refreshBoardGestureState();
   boardCanvas.setPointerCapture(event.pointerId);
+  event.preventDefault();
 });
 
 boardCanvas.addEventListener("pointermove", (event) => {
-  if (!dragState || dragState.pointerId !== event.pointerId || !board) {
+  if (!board || !boardPointers.has(event.pointerId)) {
     return;
   }
-  const dx = event.clientX - dragState.x;
-  const dy = event.clientY - dragState.y;
-  dragState.x = event.clientX;
-  dragState.y = event.clientY;
 
-  camera.x -= dx / camera.zoom;
-  camera.y -= dy / camera.zoom;
+  boardPointers.set(event.pointerId, {
+    x: event.clientX,
+    y: event.clientY
+  });
+
+  if (!boardGestureState) {
+    refreshBoardGestureState();
+    return;
+  }
+
+  if (boardGestureState.type === "drag") {
+    if (boardGestureState.pointerId !== event.pointerId) {
+      return;
+    }
+
+    const dx = event.clientX - boardGestureState.x;
+    const dy = event.clientY - boardGestureState.y;
+    boardGestureState.x = event.clientX;
+    boardGestureState.y = event.clientY;
+
+    camera.x -= dx / camera.zoom;
+    camera.y -= dy / camera.zoom;
+    hasUserNavigated = true;
+    clampCamera();
+    render();
+    scheduleCameraStateSave();
+    event.preventDefault();
+    return;
+  }
+
+  if (boardGestureState.type !== "pinch") {
+    return;
+  }
+
+  const pointA = boardPointers.get(boardGestureState.pointerAId);
+  const pointB = boardPointers.get(boardGestureState.pointerBId);
+  if (!pointA || !pointB) {
+    refreshBoardGestureState();
+    return;
+  }
+
+  const geometry = getPointerGeometry(pointA, pointB);
+  const currentDistance = Math.max(geometry.distance, 1);
+  const zoomRate = currentDistance / boardGestureState.previousDistance;
+  const nextZoom = clamp(camera.zoom * zoomRate, camera.minZoom, camera.maxZoom);
+  const anchorWorldX = camera.x + boardGestureState.previousCenterX / camera.zoom;
+  const anchorWorldY = camera.y + boardGestureState.previousCenterY / camera.zoom;
+
+  camera.zoom = nextZoom;
+  camera.x = anchorWorldX - geometry.centerX / camera.zoom;
+  camera.y = anchorWorldY - geometry.centerY / camera.zoom;
+  boardGestureState.previousDistance = currentDistance;
+  boardGestureState.previousCenterX = geometry.centerX;
+  boardGestureState.previousCenterY = geometry.centerY;
+
   hasUserNavigated = true;
   clampCamera();
   render();
   scheduleCameraStateSave();
+  event.preventDefault();
 });
 
-function endBoardDrag(event) {
-  if (!dragState || dragState.pointerId !== event.pointerId) {
+function endBoardPointer(event) {
+  if (!boardPointers.has(event.pointerId)) {
     return;
   }
-  boardCanvas.classList.remove("dragging");
-  boardCanvas.releasePointerCapture(event.pointerId);
-  dragState = null;
+
+  boardPointers.delete(event.pointerId);
+  if (boardCanvas.hasPointerCapture(event.pointerId)) {
+    boardCanvas.releasePointerCapture(event.pointerId);
+  }
+  refreshBoardGestureState();
 }
 
-boardCanvas.addEventListener("pointerup", endBoardDrag);
-boardCanvas.addEventListener("pointercancel", endBoardDrag);
+boardCanvas.addEventListener("pointerup", endBoardPointer);
+boardCanvas.addEventListener("pointercancel", endBoardPointer);
 
 boardCanvas.addEventListener(
   "wheel",

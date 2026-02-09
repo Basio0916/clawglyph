@@ -29,7 +29,7 @@ export default function HomePage() {
           </aside>
         </section>
         <section className="legend">
-          <p>Controls: Drag to pan / Mouse wheel to zoom / Minimap to jump</p>
+          <p>Controls: Drag to pan / Pinch or mouse wheel to zoom / Minimap to jump</p>
         </section>
       </main>
       <Script src="/viewer.js" strategy="afterInteractive" />
