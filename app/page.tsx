@@ -33,6 +33,16 @@ export default function HomePage() {
         <section className="legend">
           <p>Controls: Drag to pan / Pinch or mouse wheel to zoom / Minimap to jump</p>
         </section>
+        <footer className="badge-footer">
+          <a href="https://orynth.dev/projects/clawglyph" target="_blank" rel="noopener">
+            <img
+              src="https://orynth.dev/api/badge/clawglyph?theme=light&style=default"
+              alt="Featured on Orynth"
+              width="260"
+              height="80"
+            />
+          </a>
+        </footer>
       </main>
       <Script src={viewerScriptSrc} strategy="afterInteractive" />
     </>
